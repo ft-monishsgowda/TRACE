@@ -1,0 +1,6 @@
+{
+  "name": "T.R.A.C.E - Email Threat Forensic Analyzer",
+  "description": "Advanced EML security forensics powered by Gemini API, featuring hop-to-hop IP routing inspection, domain mismatch detection, trust scoring, HTML/PDF forensic reports, and Supabase case logging.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
