@@ -13,7 +13,13 @@ export async function exportReportToPdf(elementId: string, filename: string = 'T
       orientation: 'portrait',
       unit: 'mm',
       format: 'a4',
+      compress: true,
     });
+
+    // Temporarily reset any zoom transform on the element to ensure pristine 1:1 rasterization
+    const originalTransform = element.style.transform;
+    const originalTransformOrigin = element.style.transformOrigin;
+    element.style.transform = 'none';
 
     // Check if the container has dedicated .pdf-page elements
     const pageElements = Array.from(element.querySelectorAll<HTMLElement>('.pdf-page'));
@@ -22,25 +28,28 @@ export async function exportReportToPdf(elementId: string, filename: string = 'T
       for (let i = 0; i < pageElements.length; i++) {
         const pageEl = pageElements[i];
         const canvas = await html2canvas(pageEl, {
-          scale: 2, // High resolution rendering
+          scale: 2, // High resolution crisp rendering (approx 192 DPI)
           useCORS: true,
           logging: false,
           backgroundColor: '#ffffff',
+          windowWidth: 1024,
         });
 
         const imgData = canvas.toDataURL('image/png');
         if (i > 0) {
-          pdf.addPage();
+          pdf.addPage('a4', 'portrait');
         }
+        // Exactly align to A4 dimensions: 210mm width x 297mm height
         pdf.addImage(imgData, 'PNG', 0, 0, 210, 297, undefined, 'FAST');
       }
     } else {
-      // Fallback: render entire container
+      // Fallback: render entire container paginated to A4
       const canvas = await html2canvas(element, {
         scale: 2,
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
+        windowWidth: 1024,
       });
 
       const imgData = canvas.toDataURL('image/png');
@@ -55,15 +64,21 @@ export async function exportReportToPdf(elementId: string, filename: string = 'T
 
       while (heightLeft >= 0) {
         position = heightLeft - imgHeight;
-        pdf.addPage();
+        pdf.addPage('a4', 'portrait');
         pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
         heightLeft -= pageHeight;
       }
     }
 
+    // Restore zoom transform
+    element.style.transform = originalTransform;
+    element.style.transformOrigin = originalTransformOrigin;
+
     pdf.save(filename);
     return true;
   } catch (err) {
+    // Restore transform if error occurs
+    element.style.transform = '';
     console.error('PDF export failed with html2canvas, falling back to window print', err);
     // Fallback: trigger print
     window.print();

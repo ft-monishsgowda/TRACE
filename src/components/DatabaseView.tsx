@@ -21,6 +21,8 @@ interface DatabaseViewProps {
   onDeleteRecord: (record: SupabaseThreatRecord) => Promise<void> | void;
   supabaseApiKey: string;
   setSupabaseApiKey: (key: string) => void;
+  dbError?: string | null;
+  dbHint?: string | null;
 }
 
 export const DatabaseView: React.FC<DatabaseViewProps> = ({
@@ -31,6 +33,8 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   onDeleteRecord,
   supabaseApiKey,
   setSupabaseApiKey,
+  dbError,
+  dbHint,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -84,17 +88,22 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     }
   };
 
-  const SQL_SCHEMA = `-- Supabase Table Schema Configuration for T.R.A.C.E Threat Intelligence
+  const SQL_SCHEMA = `-- ==============================================================================
+-- T.R.A.C.E Incident Response & Cyber Forensics — Supabase Schema Setup
+-- Direct link: https://supabase.com/dashboard/project/hnfmtcpxfmyxljilbpte/sql/new
+-- ==============================================================================
+
+-- 1. Create table if not exists
 create table if not exists public.threat_data (
   id uuid default gen_random_uuid() primary key,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
   subject text,
   sender text,
   recipient text,
-  threat_score integer,
-  trust_score integer,
-  threat_level text,
-  category text,
+  threat_score integer default 0,
+  trust_score integer default 100,
+  threat_level text default 'UNKNOWN',
+  category text default 'unclassified',
   indicators_count integer default 0,
   origin_ip text,
   forensic_html text,
@@ -102,7 +111,26 @@ create table if not exists public.threat_data (
   soc_verdict text
 );
 
+-- 2. Add columns if table already existed with only 'id'
+alter table public.threat_data add column if not exists created_at timestamp with time zone default timezone('utc'::text, now());
+alter table public.threat_data add column if not exists subject text;
+alter table public.threat_data add column if not exists sender text;
+alter table public.threat_data add column if not exists recipient text;
+alter table public.threat_data add column if not exists threat_score integer default 0;
+alter table public.threat_data add column if not exists trust_score integer default 100;
+alter table public.threat_data add column if not exists threat_level text default 'UNKNOWN';
+alter table public.threat_data add column if not exists category text default 'unclassified';
+alter table public.threat_data add column if not exists indicators_count integer default 0;
+alter table public.threat_data add column if not exists origin_ip text;
+alter table public.threat_data add column if not exists forensic_html text;
+alter table public.threat_data add column if not exists raw_eml_snippet text;
+alter table public.threat_data add column if not exists soc_verdict text;
+
+-- 3. Enable RLS and grant read/write access to anon & authenticated roles
 alter table public.threat_data enable row level security;
+
+drop policy if exists "Allow read, insert and delete on threat_data" on public.threat_data;
+drop policy if exists "Allow all on threat_data" on public.threat_data;
 
 create policy "Allow read, insert and delete on threat_data"
   on public.threat_data
@@ -132,6 +160,25 @@ create policy "Allow read, insert and delete on threat_data"
             className="text-[#a1a1aa] hover:text-[#fafafa] text-[11px] px-1.5 py-0.5 rounded cursor-pointer"
           >
             Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Database Diagnostic & Schema Warning Banner */}
+      {dbError && (
+        <div className="card-console bg-[#232324] border border-[#f59e0b]/50 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs font-mono animate-fadeIn">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-[#f59e0b] shrink-0 mt-0.5" />
+            <div>
+              <p className="text-[#fafafa] font-medium">Supabase Table Schema Warning: {dbError}</p>
+              {dbHint && <p className="text-[#a1a1aa] text-[11px] mt-0.5 font-sans">{dbHint}</p>}
+            </div>
+          </div>
+          <button
+            onClick={() => setShowConfigModal(true)}
+            className="btn-pill-primary text-xs py-1.5 px-3 whitespace-nowrap cursor-pointer shrink-0"
+          >
+            View SQL Migration
           </button>
         </div>
       )}
@@ -453,14 +500,27 @@ create policy "Allow read, insert and delete on threat_data"
                   <h4 className="font-mono text-xs font-medium text-[#fafafa] uppercase tracking-wider">
                     2. Table Schema Migration SQL
                   </h4>
-                  <button
-                    onClick={handleCopySql}
-                    className="flex items-center gap-1 text-[11px] font-mono text-[#a1a1aa] hover:text-[#fafafa] cursor-pointer"
-                  >
-                    {copiedSql ? <Check className="w-3 h-3 text-[#fafafa]" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedSql ? 'Copied SQL' : 'Copy SQL'}</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <a
+                      href="https://supabase.com/dashboard/project/hnfmtcpxfmyxljilbpte/sql/new"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] font-mono text-[#fafafa] underline hover:text-[#a1a1aa]"
+                    >
+                      Open Supabase SQL Editor
+                    </a>
+                    <button
+                      onClick={handleCopySql}
+                      className="flex items-center gap-1 text-[11px] font-mono text-[#a1a1aa] hover:text-[#fafafa] cursor-pointer"
+                    >
+                      {copiedSql ? <Check className="w-3 h-3 text-[#fafafa]" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedSql ? 'Copied SQL' : 'Copy SQL'}</span>
+                    </button>
+                  </div>
                 </div>
+                <p className="text-[#a1a1aa] mb-2 text-[11px]">
+                  Copy and run this SQL once in your Supabase SQL Editor to add all forensic fields and enable RLS policies:
+                </p>
                 <pre className="bg-[#181818] border border-[#5c5c61] p-3 rounded text-[11px] font-mono text-[#ebeced] overflow-x-auto max-h-48 leading-relaxed">
                   {SQL_SCHEMA}
                 </pre>

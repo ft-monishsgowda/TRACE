@@ -19,6 +19,10 @@ export const ForensicReportViewer: React.FC<ForensicReportViewerProps> = ({
   const [isExporting, setIsExporting] = useState(false);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
 
+  // Compute total A4 sheets present in the generated report
+  const pageMatches = htmlReport.match(/class=["']pdf-page["']/g) || [];
+  const sheetCount = Math.max(pageMatches.length, 3);
+
   useEffect(() => {
     if (containerRef.current) {
       animateViewTransition(containerRef.current);
@@ -68,6 +72,34 @@ export const ForensicReportViewer: React.FC<ForensicReportViewerProps> = ({
 
         {/* View mode toggle & action buttons */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* A4 Sheet Indicator & Quick Jumpers */}
+          {viewMode === 'rendered' && (
+            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#181818] border border-[#5c5c61] text-xs font-mono text-[#a1a1aa]">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              <span>A4 ({sheetCount} Sheets)</span>
+              <div className="flex items-center gap-1 ml-1 pl-1.5 border-l border-[#5c5c61]">
+                {Array.from({ length: sheetCount }).map((_, idx) => {
+                  const pNum = idx + 1;
+                  return (
+                    <button
+                      key={pNum}
+                      onClick={() => {
+                        const target = document.getElementById(`report-page-${pNum}`);
+                        if (target) {
+                          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                      }}
+                      className="px-1.5 py-0.5 text-[10px] rounded hover:bg-[#2e2e2e] hover:text-[#fafafa] text-[#ebeced] transition-colors cursor-pointer"
+                      title={`Jump to A4 Sheet ${pNum}`}
+                    >
+                      S{pNum}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Zoom controls for comfortable reading */}
           {viewMode === 'rendered' && (
             <div className="flex items-center bg-[#181818] px-2 py-1 rounded-full border border-[#5c5c61] text-xs font-mono text-[#ebeced] gap-1">
@@ -170,7 +202,7 @@ export const ForensicReportViewer: React.FC<ForensicReportViewerProps> = ({
           >
             <div
               id="renderedForensicDocument"
-              className="w-full max-w-[840px] px-2 sm:px-4 flex flex-col items-center transition-transform duration-200 ease-out origin-top"
+              className="w-full max-w-[900px] px-2 sm:px-4 flex flex-col items-center transition-transform duration-200 ease-out origin-top"
               style={{
                 transform: zoomLevel !== 100 ? `scale(${zoomLevel / 100})` : undefined,
                 transformOrigin: 'top center',

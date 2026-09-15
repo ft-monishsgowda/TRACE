@@ -1,30 +1,54 @@
 import express from "express";
 import path from "path";
+import crypto from "crypto";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { GEMINI_SYSTEM_PROMPT } from "./src/prompts/geminiPrompt";
 import { analyzeEmlDeterministic, generateForensicHtmlReport } from "./src/utils/emlParser";
+import { detectEmailLanguage } from "./src/utils/languageDetector";
 
 dotenv.config();
 
 const PORT = 3000;
-const SUPABASE_DEFAULT_URL = process.env.SUPABASE_URL || "https://hnfmtcpxfmyxljilbpte.supabase.co/rest/v1/threat_data";
+
+function resolveSupabaseUrl(): string {
+  const raw = process.env.SUPABASE_URL || "https://hnfmtcpxfmyxljilbpte.supabase.co/rest/v1/threat_data";
+  const trimmed = raw.trim();
+  if (trimmed.endsWith("/threat_data")) {
+    return trimmed;
+  }
+  return trimmed.endsWith("/") ? `${trimmed}threat_data` : `${trimmed}/threat_data`;
+}
+
+const SUPABASE_DEFAULT_URL = resolveSupabaseUrl();
 const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || "";
 
-let genAIClient: GoogleGenAI | null = null;
-function getGenAI(): GoogleGenAI | null {
-  if (!genAIClient && process.env.GEMINI_API_KEY) {
-    genAIClient = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
+// Gather all available Gemini API keys for seamless rotation and failover
+function getAvailableGeminiKeys(): string[] {
+  const keys = [
+    process.env.GEMINI_API_KEY,
+    process.env.GEMINI_API_KEY_2,
+    process.env.GEMINI_API_KEY_3,
+  ].filter((k): k is string => !!k && k.trim().length > 0);
+  return keys;
+}
+
+const genAIClients: Map<string, GoogleGenAI> = new Map();
+function getGenAIClientForKey(apiKey: string): GoogleGenAI {
+  let client = genAIClients.get(apiKey);
+  if (!client) {
+    client = new GoogleGenAI({
+      apiKey,
       httpOptions: {
         headers: {
           'User-Agent': 'aistudio-build',
         },
       },
     });
+    genAIClients.set(apiKey, client);
   }
-  return genAIClient;
+  return client;
 }
 
 async function startServer() {
@@ -33,9 +57,11 @@ async function startServer() {
 
   // Health check
   app.get("/api/health", (req, res) => {
+    const keys = getAvailableGeminiKeys();
     res.json({
       status: "ok",
-      geminiConfigured: !!process.env.GEMINI_API_KEY,
+      geminiConfigured: keys.length > 0,
+      geminiKeysCount: keys.length,
       supabaseUrl: SUPABASE_DEFAULT_URL,
       supabaseKeyConfigured: !!SUPABASE_KEY,
     });
@@ -49,28 +75,30 @@ async function startServer() {
         return res.status(400).json({ error: "emlContent string is required" });
       }
 
-      const client = getGenAI();
+      const availableKeys = getAvailableGeminiKeys();
 
-      // Candidate models for graceful fallback when 503 UNAVAILABLE / high demand occurs
+      // Candidate models ordered by response speed and current availability
       const candidateModels = [
-        "gemini-3.1-flash-lite",
-        "gemini-3.8-flash",
-        "gemini-flash-latest",
-        "gemini-3.1-pro-preview",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
       ];
 
-      // If Gemini client is available, attempt generation across candidate models with brief backoff
-      if (client) {
-        for (const modelName of candidateModels) {
-          try {
-            const geminiResponse = await client.models.generateContent({
-              model: modelName,
-              contents: `Conduct full DFIR cyber forensic investigation on this raw RFC 5322 .EML content:\n\n${emlContent}`,
-              config: {
-                systemInstruction: GEMINI_SYSTEM_PROMPT,
-                responseMimeType: "application/json",
-                temperature: 0.1,
-                responseSchema: {
+      // If any Gemini keys are available, attempt generation across available keys & models with brief backoff
+      if (availableKeys.length > 0) {
+        for (const apiKey of availableKeys) {
+          const client = getGenAIClientForKey(apiKey);
+          for (const modelName of candidateModels) {
+            try {
+              // Enforce an 18-second timeout per model attempt so slow responses do not stall the app
+              const generatePromise = client.models.generateContent({
+                model: modelName,
+                contents: `Conduct full DFIR cyber forensic investigation on this raw RFC 5322 .EML content:\n\n${emlContent}`,
+                config: {
+                  systemInstruction: GEMINI_SYSTEM_PROMPT,
+                  responseMimeType: "application/json",
+                  temperature: 0.1,
+                  responseSchema: {
                   type: Type.OBJECT,
                   properties: {
                     score: {
@@ -179,6 +207,7 @@ async function startServer() {
                             messageIdValidity: { type: Type.STRING },
                             mailerSoftware: { type: Type.STRING },
                             characterEncoding: { type: Type.STRING },
+                            detectedLanguage: { type: Type.STRING },
                             anomalousHeaders: {
                               type: Type.ARRAY,
                               items: { type: Type.STRING },
@@ -200,7 +229,13 @@ async function startServer() {
               },
             });
 
-            const rawText = geminiResponse.text?.trim();
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error(`Timeout waiting for model ${modelName}`)), 18000)
+            );
+
+            const geminiResponse: any = await Promise.race([generatePromise, timeoutPromise]);
+
+            const rawText = geminiResponse?.text?.trim();
             if (rawText) {
               const parsedJson = JSON.parse(rawText);
               const fallback = analyzeEmlDeterministic(emlContent);
@@ -217,9 +252,27 @@ async function startServer() {
                 ? parsedJson.report.urls_analyzed
                 : fallback.report.urls_analyzed;
 
-              const attachments = (parsedJson.report?.attachments_analyzed && parsedJson.report.attachments_analyzed.length > 0)
+              const fallbackAttachments = fallback.report.attachments_analyzed || [];
+              const rawAttachments = (parsedJson.report?.attachments_analyzed && parsedJson.report.attachments_analyzed.length > 0)
                 ? parsedJson.report.attachments_analyzed
-                : fallback.report.attachments_analyzed;
+                : fallbackAttachments;
+
+              const attachments = rawAttachments.map((att: any) => {
+                const match = fallbackAttachments.find((f: any) => f.filename === att.filename) || (fallbackAttachments.length === 1 ? fallbackAttachments[0] : undefined);
+                return {
+                  ...att,
+                  isImage: att.isImage ?? match?.isImage ?? false,
+                  imageDataUrl: att.imageDataUrl || match?.imageDataUrl,
+                  imageDescription: att.imageDescription || match?.imageDescription,
+                  sizeBytes: att.sizeBytes || match?.sizeBytes || 1024,
+                };
+              });
+
+              fallbackAttachments.forEach((fb: any) => {
+                if (fb.isImage && !attachments.some((a: any) => a.filename === fb.filename)) {
+                  attachments.push(fb);
+                }
+              });
 
               const findings = (parsedJson.report?.point_wise_findings && parsedJson.report.point_wise_findings.length > 0)
                 ? parsedJson.report.point_wise_findings
@@ -235,11 +288,14 @@ async function startServer() {
                 ? parsedJson.report.social_engineering
                 : fallback.report.social_engineering;
 
+              const detectedLanguage = fallback.detectedLanguage || detectEmailLanguage(emlContent);
+
               // Ensure minute_technical_details is thoroughly populated and resilient
               const minuteDetails = {
                 messageIdValidity: parsedJson.report?.minute_technical_details?.messageIdValidity || fallback.report.minute_technical_details.messageIdValidity,
                 mailerSoftware: parsedJson.report?.minute_technical_details?.mailerSoftware || fallback.report.minute_technical_details.mailerSoftware || 'Standard MTA',
                 characterEncoding: parsedJson.report?.minute_technical_details?.characterEncoding || fallback.report.minute_technical_details.characterEncoding || 'utf-8',
+                detectedLanguage: parsedJson.report?.minute_technical_details?.detectedLanguage || `${detectedLanguage.name} (${detectedLanguage.code.toUpperCase()}) — ${detectedLanguage.confidence}% confidence`,
                 anomalousHeaders: (parsedJson.report?.minute_technical_details?.anomalousHeaders && Array.isArray(parsedJson.report.minute_technical_details.anomalousHeaders))
                   ? parsedJson.report.minute_technical_details.anomalousHeaders
                   : fallback.report.minute_technical_details.anomalousHeaders,
@@ -267,6 +323,7 @@ async function startServer() {
                 recipient: fallback.recipient,
                 date: new Date().toUTCString(),
                 messageId: fallback.id,
+                detectedLanguage,
                 threatScore: parsedJson.score?.threat_score ?? fallback.score.threat_score,
                 trustScore: parsedJson.score?.trust_score ?? fallback.score.trust_score,
                 threatLevel: parsedJson.score?.threat_level ?? fallback.score.threat_level,
@@ -289,6 +346,7 @@ async function startServer() {
                 subject: fallback.subject,
                 sender: fallback.sender,
                 recipient: fallback.recipient,
+                detectedLanguage,
                 score: {
                   threat_score: parsedJson.score?.threat_score ?? fallback.score.threat_score,
                   trust_score: parsedJson.score?.trust_score ?? fallback.score.trust_score,
@@ -303,12 +361,14 @@ async function startServer() {
           } catch (modelErr: any) {
             const errStr = modelErr?.message || String(modelErr);
             const is503 = errStr.includes('503') || errStr.includes('UNAVAILABLE') || errStr.includes('high demand');
-            console.log(`[AI Engine] Model ${modelName} ${is503 ? 'experiencing temporary load spike (503)' : 'encountered error'}. Trying next candidate model...`);
+            const isQuota = errStr.includes('429') || errStr.includes('quota') || errStr.includes('RESOURCE_EXHAUSTED');
+            console.log(`[AI Engine] Model ${modelName} ${is503 ? 'experiencing temporary load spike (503)' : isQuota ? 'quota exceeded (429)' : 'returned: ' + errStr.slice(0, 100)}. Trying next candidate...`);
             // Brief backoff before next model attempt
-            await new Promise((resolve) => setTimeout(resolve, 250));
+            await new Promise((resolve) => setTimeout(resolve, 200));
           }
         }
       }
+    }
 
       // Fallback deterministic analysis engine (fully self-contained RFC 5322 & DFIR parser)
       console.info("Engaging deterministic RFC 5322 DFIR investigation engine...");
@@ -327,7 +387,10 @@ async function startServer() {
   // Supabase Proxy: POST /api/supabase/threat_data
   app.post("/api/supabase/threat_data", async (req, res) => {
     try {
-      const record = req.body;
+      const record = { ...req.body };
+      if (!record.id) {
+        record.id = crypto.randomUUID();
+      }
       const customKey = req.headers["x-supabase-key"] as string || SUPABASE_KEY;
 
       const headers: Record<string, string> = {
@@ -355,14 +418,19 @@ async function startServer() {
       }
 
       if (!response.ok) {
+        const rawMsg = JSON.stringify(parsed);
         return res.status(response.status).json({
           error: "Supabase REST request failed",
           statusCode: response.status,
           details: parsed,
           hint: response.status === 401 || response.status === 403
-            ? "Supabase API authentication key is required. You can provide your anon/service key in the Database view or via SUPABASE_ANON_KEY env variable."
+            ? "Supabase API authentication key is required or unauthorized. You can update your key in the Database view or via SUPABASE_ANON_KEY env variable."
             : response.status === 404
-            ? "Table 'threat_data' might not exist on this Supabase project yet. See Database Schema instructions to run the SQL migration."
+            ? "Table 'threat_data' does not exist on this Supabase project. In Database view, click 'Schema & Auth' and run the SQL migration."
+            : rawMsg.includes("42501") || rawMsg.includes("row-level security")
+            ? "Row Level Security policy blocked insert. Run the RLS policy in Supabase SQL editor: 'create policy \"Allow all\" on threat_data for all using (true) with check (true);'"
+            : rawMsg.includes("PGRST204") || rawMsg.includes("Could not find the") || rawMsg.includes("42703")
+            ? "Missing table columns in Supabase. In the Database view, click 'Schema & Auth' and run the column migration script in your Supabase SQL editor."
             : undefined,
         });
       }
@@ -390,10 +458,22 @@ async function startServer() {
         headers["Authorization"] = `Bearer ${customKey}`;
       }
 
-      const response = await fetch(`${SUPABASE_DEFAULT_URL}?select=*&order=created_at.desc&limit=50`, {
+      // First try standard query ordered by created_at desc
+      let response = await fetch(`${SUPABASE_DEFAULT_URL}?select=*&order=created_at.desc&limit=50`, {
         method: "GET",
         headers,
       });
+
+      // If created_at column doesn't exist yet, fall back to basic select=*
+      if (!response.ok) {
+        const checkErr = await response.clone().text();
+        if (checkErr.includes("created_at does not exist")) {
+          response = await fetch(`${SUPABASE_DEFAULT_URL}?select=*&limit=50`, {
+            method: "GET",
+            headers,
+          });
+        }
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -401,8 +481,10 @@ async function startServer() {
           error: "Supabase GET failed",
           statusCode: response.status,
           details: errorText,
-          hint: response.status === 401
+          hint: response.status === 401 || response.status === 403
             ? "Authentication key required for remote Supabase DB."
+            : errorText.includes("42703") || errorText.includes("does not exist")
+            ? "The table 'threat_data' exists but is missing required columns. Click 'Schema & Auth' in the Database tab and run the SQL migration in your Supabase SQL editor."
             : undefined,
         });
       }

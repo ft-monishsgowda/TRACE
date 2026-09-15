@@ -25,6 +25,8 @@ export default function App() {
   });
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncSuccess, setSyncSuccess] = useState<boolean>(false);
+  const [dbError, setDbError] = useState<string | null>(null);
+  const [dbHint, setDbHint] = useState<string | null>(null);
   const viewContainerRef = useRef<HTMLDivElement>(null);
 
   // Smooth view transition on tab switch powered by anime.js
@@ -99,6 +101,8 @@ export default function App() {
 
   const fetchSupabaseRecords = async () => {
     setIsDbLoading(true);
+    setDbError(null);
+    setDbHint(null);
     try {
       const headers: Record<string, string> = {};
       if (supabaseApiKey) {
@@ -106,12 +110,18 @@ export default function App() {
       }
       const res = await fetch('/api/supabase/threat_data', { headers });
       const json = await res.json();
-      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-        setSupabaseRecords(json.data);
-        localStorage.setItem('TRACE_LOCAL_RECORDS', JSON.stringify(json.data));
+      if (json.success && Array.isArray(json.data)) {
+        if (json.data.length > 0) {
+          setSupabaseRecords(json.data);
+          localStorage.setItem('TRACE_LOCAL_RECORDS', JSON.stringify(json.data));
+        }
+      } else if (json.error) {
+        setDbError(json.error);
+        if (json.hint) setDbHint(json.hint);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.log('Supabase fetch note:', err);
+      setDbError('Failed to communicate with Supabase proxy endpoint');
     } finally {
       setIsDbLoading(false);
     }
@@ -155,6 +165,7 @@ export default function App() {
   const saveRecordToDatabase = async (res: EmailForensicResult) => {
     setIsSyncing(true);
     const newRecord: SupabaseThreatRecord = {
+      id: crypto.randomUUID ? crypto.randomUUID() : undefined,
       subject: res.subject,
       sender: res.sender,
       recipient: res.recipient,
@@ -418,6 +429,8 @@ export default function App() {
               setSupabaseApiKey(key);
               localStorage.setItem('TRACE_SUPABASE_KEY', key);
             }}
+            dbError={dbError}
+            dbHint={dbHint}
           />
         )}
 

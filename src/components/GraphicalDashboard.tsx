@@ -23,6 +23,10 @@ import {
   HelpCircle,
   ExternalLink,
   Paperclip,
+  Image as ImageIcon,
+  ZoomIn,
+  Eye,
+  X,
 } from 'lucide-react';
 import { animateNumber, animateGaugeCircle, animateStaggerItems, animateViewTransition, initScrollReveal } from '../utils/animations';
 import { ThreatTrendHeatmap } from './ThreatTrendHeatmap';
@@ -44,12 +48,15 @@ export const GraphicalDashboard: React.FC<GraphicalDashboardProps> = ({
   isSyncing,
   syncSuccess,
 }) => {
+  const [previewImage, setPreviewImage] = React.useState<{ url: string; filename: string; desc?: string } | null>(null);
+
   const score = result.score || { threat_score: 0, trust_score: 100, threat_level: 'SAFE', category: 'legitimate', confidence: 90 };
   const report = result.report || ({} as any);
   const subject = result.subject || '(No Subject)';
   const sender = result.sender || 'Unknown';
   const recipient = result.recipient || 'Unknown';
   const timestamp = result.timestamp || new Date().toISOString();
+  const detectedLanguage = result.detectedLanguage;
 
   // Normalized safe accessors
   const minuteDetails = report.minute_technical_details || {};
@@ -145,6 +152,17 @@ export const GraphicalDashboard: React.FC<GraphicalDashboardProps> = ({
             <span className="text-[11px] font-mono text-[#a1a1aa]">
               Confidence: {score.confidence}%
             </span>
+            {detectedLanguage && (
+              <span
+                id="dashboardLanguageTag"
+                className="text-[11px] font-mono px-2.5 py-0.5 rounded bg-[#181818] border border-[#5c5c61] text-[#fafafa] flex items-center gap-1.5"
+                title={`Detected Language: ${detectedLanguage.name} (${detectedLanguage.confidence}% confidence)`}
+              >
+                <Globe className="w-3 h-3 text-[#a1a1aa]" />
+                <span>Language: <strong className="font-semibold text-[#fafafa]">{detectedLanguage.name}</strong></span>
+                <span className="text-[10px] text-[#a1a1aa]">({detectedLanguage.code.toUpperCase()})</span>
+              </span>
+            )}
             <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#181818] border border-[#5c5c61] text-[#fafafa]">
               {result.source ? (result.source.includes('gemini') ? `AI: ${result.source}` : 'Engine: Deterministic DFIR') : 'Engine: DFIR Core'}
             </span>
@@ -573,6 +591,11 @@ export const GraphicalDashboard: React.FC<GraphicalDashboardProps> = ({
                 <strong>Encoding:</strong> {minuteDetails.characterEncoding}
               </span>
             )}
+            {(detectedLanguage || minuteDetails.detectedLanguage) && (
+              <span>
+                <strong>Language:</strong> {detectedLanguage ? `${detectedLanguage.name} (${detectedLanguage.code.toUpperCase()}) — ${detectedLanguage.confidence}% conf` : minuteDetails.detectedLanguage}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -670,24 +693,86 @@ export const GraphicalDashboard: React.FC<GraphicalDashboardProps> = ({
                 No binary or image attachments found. Plain text payload.
               </div>
             ) : (
-              attachmentsAnalyzed.map((att, i) => (
-                <div key={i} className="bg-[#181818] border border-[#5c5c61] rounded p-2.5 text-xs font-mono">
-                  <div className="flex items-center justify-between mb-1 gap-2">
-                    <span className="font-medium text-[#fafafa] truncate">
-                      {att.filename}
-                    </span>
-                    <span className="text-[10px] bg-[#232324] border border-[#5c5c61] text-[#fafafa] px-1.5 py-0.5 rounded shrink-0">
-                      PAYLOAD
-                    </span>
+              attachmentsAnalyzed.map((att, i) => {
+                const descLines = (att.imageDescription || '').split('\n');
+                const line1 = descLines[0];
+                const line2 = descLines[1];
+                return (
+                  <div key={i} className="bg-[#181818] border border-[#5c5c61] rounded p-3 text-xs font-mono">
+                    <div className="flex items-center justify-between mb-1.5 gap-2">
+                      <span className="font-medium text-[#fafafa] truncate flex items-center gap-1.5">
+                        {att.isImage ? <ImageIcon className="w-3.5 h-3.5 text-[#ea580c]" /> : <Paperclip className="w-3.5 h-3.5 text-[#a1a1aa]" />}
+                        {att.filename}
+                      </span>
+                      <span className={`text-[10px] border px-1.5 py-0.5 rounded shrink-0 ${att.isImage ? 'bg-orange-950/40 border-orange-700/60 text-orange-300 font-bold' : 'bg-[#232324] border-[#5c5c61] text-[#fafafa]'}`}>
+                        {att.isImage ? 'IMAGE PAYLOAD' : 'PAYLOAD'}
+                      </span>
+                    </div>
+
+                    <div className="text-[11px] text-[#a1a1aa] mb-1.5 flex items-center gap-2">
+                      <span>Type: {att.contentType}</span>
+                      {att.sizeBytes && (
+                        <span>• Size: {att.sizeBytes > 1024 ? `${(att.sizeBytes / 1024).toFixed(1)} KB` : `${att.sizeBytes} B`}</span>
+                      )}
+                    </div>
+
+                    {/* Image Reconstructed View */}
+                    {att.isImage && att.imageDataUrl && (
+                      <div className="mt-2 mb-2.5">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[10px] uppercase font-mono tracking-wider text-neutral-300 flex items-center gap-1">
+                            <Eye className="w-3 h-3 text-[#ea580c]" /> Reconstructed Forensic Image
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setPreviewImage({ url: att.imageDataUrl!, filename: att.filename, desc: att.imageDescription })}
+                            className="flex items-center gap-1 text-[10px] font-mono text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                          >
+                            <ZoomIn className="w-3 h-3" /> Click to Enlarge
+                          </button>
+                        </div>
+                        <div
+                          onClick={() => setPreviewImage({ url: att.imageDataUrl!, filename: att.filename, desc: att.imageDescription })}
+                          className="cursor-pointer border border-[#3f3f46] hover:border-orange-500/80 rounded bg-[#09090b] p-2 flex flex-col items-center justify-center transition-all group/img relative overflow-hidden"
+                          title="Click to view full reconstructed forensic payload"
+                        >
+                          <img
+                            src={att.imageDataUrl}
+                            alt={att.filename}
+                            className="w-full max-h-[190px] object-contain rounded transition-transform duration-200 group-hover/img:scale-[1.01]"
+                          />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition-opacity">
+                            <span className="bg-[#18181b]/95 border border-[#52525b] text-[#fafafa] px-2.5 py-1 rounded text-[11px] font-mono flex items-center gap-1.5 shadow-lg">
+                              <ZoomIn className="w-3.5 h-3.5 text-[#ea580c]" /> Inspect Raster Payload
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* 2-line forensic description */}
+                        {att.imageDescription && (
+                          <div className="mt-2 p-2.5 rounded bg-[#101010] border border-[#3f3f46] text-[11px] font-mono leading-relaxed space-y-1">
+                            <div className="text-[#f4f4f5] font-semibold flex items-start gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#ea580c] mt-1.5 shrink-0" />
+                              <span>{line1}</span>
+                            </div>
+                            {line2 && (
+                              <div className="text-[#a1a1aa] pl-3 text-[10.5px]">
+                                {line2}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {!att.isImage && (
+                      <p className="text-[11px] text-[#ebeced] font-sans">
+                        {att.notes}
+                      </p>
+                    )}
                   </div>
-                  <div className="text-[11px] text-[#a1a1aa] mb-1">
-                    Type: {att.contentType}
-                  </div>
-                  <p className="text-[11px] text-[#ebeced] font-sans">
-                    {att.notes}
-                  </p>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -716,6 +801,59 @@ export const GraphicalDashboard: React.FC<GraphicalDashboardProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Reconstructed Image Lightbox Modal */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div
+            className="bg-[#121214] border border-[#52525b] rounded-lg max-w-2xl w-full p-4 sm:p-6 shadow-2xl flex flex-col gap-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[#27272a] pb-3">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="w-4 h-4 text-[#ea580c]" />
+                <h3 className="font-mono text-sm font-semibold text-[#fafafa]">{previewImage.filename}</h3>
+                <span className="text-[10px] font-mono uppercase bg-orange-950/60 border border-orange-700/60 text-orange-300 px-2 py-0.5 rounded">
+                  Decoded Raster Payload
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="text-[#a1a1aa] hover:text-[#fafafa] p-1 rounded hover:bg-[#27272a] transition-colors"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-[#09090b] border border-[#27272a] rounded p-3 flex items-center justify-center">
+              <img
+                src={previewImage.url}
+                alt={previewImage.filename}
+                className="max-h-[380px] w-auto object-contain rounded shadow"
+              />
+            </div>
+
+            {previewImage.desc && (
+              <div className="bg-[#18181b] border border-[#27272a] rounded p-3 font-mono text-xs space-y-1.5">
+                <div className="text-[#fafafa] font-medium flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-[#ea580c]" />
+                  <span>{previewImage.desc.split('\n')[0]}</span>
+                </div>
+                {previewImage.desc.split('\n')[1] && (
+                  <div className="text-[#a1a1aa] pl-4 leading-relaxed text-[11px]">
+                    {previewImage.desc.split('\n')[1]}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

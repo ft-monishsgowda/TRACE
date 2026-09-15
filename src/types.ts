@@ -64,6 +64,10 @@ export interface AttachmentDetail {
   sizeBytes?: number;
   isExecutableOrSuspicious: boolean;
   notes: string;
+  isImage?: boolean;
+  imageDataUrl?: string;
+  imageDescription?: string; // 2-line forensic description
+  sha256?: string;
 }
 
 export interface InvestigationScore {
@@ -90,6 +94,7 @@ export interface InvestigationReport {
     characterEncoding?: string;
     anomalousHeaders?: string[];
     priorityFlag?: string;
+    detectedLanguage?: string;
   };
   soc_remediation_steps: string[];
   forensic_html: string; // The complete standalone HTML forensic report
@@ -101,6 +106,12 @@ export interface EmailForensicResult {
   subject: string;
   sender: string;
   recipient: string;
+  detectedLanguage?: {
+    code: string;
+    name: string;
+    nativeName?: string;
+    confidence: number;
+  };
   score: InvestigationScore;
   report: InvestigationReport;
   rawEmlSampleName?: string;

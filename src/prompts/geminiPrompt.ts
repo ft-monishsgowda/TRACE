@@ -11,6 +11,7 @@ Your objective is to conduct a rigorous, deterministic, logical forensic investi
 1. IDENTIFICATION & CLASSIFICATION:
    - Identify the exact email category: phishing, bec_scam (Business Email Compromise), malware_delivery, credential_harvesting, spoofing, spam_marketing, or legitimate.
    - Extract primary metadata: Message-ID, Subject, Date, Claimed Sender, Envelope-From, Recipient, Reply-To.
+   - Detect the language of the email (e.g. English, Spanish, French, German, Japanese, Chinese, Russian, Arabic, Hindi, etc.) and record it in minute_technical_details.detected_language.
 
 2. DOMAIN & IDENTITY INTEGRITY:
    - Perform strict domain cross-checks between Header-From, Return-Path, Reply-To, Envelope-From, and DKIM signing domain (d=).
@@ -120,6 +121,7 @@ class MinuteTechnicalDetails(BaseModel):
     message_id_validity: str = Field(..., description="Evaluation of Message-ID header syntax and legitimacy")
     mailer_software: Optional[str] = Field(None, description="X-Mailer or User-Agent header value if present")
     character_encoding: Optional[str] = Field(None, description="MIME charset and transfer encoding")
+    detected_language: Optional[str] = Field("English", description="Identified language of the email body and headers")
     anomalous_headers: List[str] = Field(default_factory=list, description="Headers that deviate from RFC compliance or flag high spam scores")
     priority_flag: str = Field("Normal", description="X-Priority, Importance, or Urgent markers")
 
