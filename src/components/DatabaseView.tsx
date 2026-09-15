@@ -10,8 +10,13 @@ import {
   Check,
   Trash2,
   AlertCircle,
+  CheckCircle2,
+  Wifi,
+  HardDrive,
+  ExternalLink,
 } from 'lucide-react';
 import { animateViewTransition, animateStaggerItems } from '../utils/animations';
+import { testSupabaseConnection } from '../utils/supabaseClient';
 
 interface DatabaseViewProps {
   records: SupabaseThreatRecord[];
@@ -44,6 +49,26 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    message: string;
+    details?: string;
+  } | null>(null);
+
+  const handleTestConnection = async () => {
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const res = await testSupabaseConnection(supabaseApiKey);
+      setTestResult(res);
+      if (res.ok) {
+        onRefresh();
+      }
+    } finally {
+      setIsTesting(false);
+    }
+  };
 
   useEffect(() => {
     if (containerRef.current) {
@@ -170,15 +195,17 @@ create policy "Allow read, insert and delete on threat_data"
           <div className="flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 text-[#f59e0b] shrink-0 mt-0.5" />
             <div>
-              <p className="text-[#fafafa] font-medium">Supabase Table Schema Warning: {dbError}</p>
-              {dbHint && <p className="text-[#a1a1aa] text-[11px] mt-0.5 font-sans">{dbHint}</p>}
+              <p className="text-[#fafafa] font-medium">
+                {dbError.toLowerCase().includes('key') ? 'Supabase Authentication Notice' : `Supabase Notice: ${dbError}`}
+              </p>
+              {dbHint && <p className="text-[#a1a1aa] text-[11px] mt-0.5 font-sans leading-relaxed">{dbHint}</p>}
             </div>
           </div>
           <button
             onClick={() => setShowConfigModal(true)}
             className="btn-pill-primary text-xs py-1.5 px-3 whitespace-nowrap cursor-pointer shrink-0"
           >
-            View SQL Migration
+            {dbError.toLowerCase().includes('key') ? 'Connect Supabase Key' : 'View SQL Migration'}
           </button>
         </div>
       )}
@@ -195,9 +222,23 @@ create policy "Allow read, insert and delete on threat_data"
               threat_data
             </span>
           </div>
-          <p className="text-xs text-[#a1a1aa] font-sans break-all">
-            Endpoint: <code className="text-[#fafafa] bg-[#181818] px-1.5 py-0.5 rounded border border-[#5c5c61]">https://hnfmtcpxfmyxljilbpte.supabase.co/rest/v1/threat_data</code>
-          </p>
+          <div className="flex flex-wrap items-center gap-2 mt-1.5">
+            <span className="text-xs text-[#a1a1aa] font-sans break-all">
+              Endpoint: <code className="text-[#fafafa] bg-[#181818] px-1.5 py-0.5 rounded border border-[#5c5c61]">https://hnfmtcpxfmyxljilbpte.supabase.co/rest/v1/threat_data</code>
+            </span>
+            <span className="text-[#5c5c61] hidden sm:inline">·</span>
+            {supabaseApiKey ? (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                <Wifi className="w-3 h-3 text-emerald-400" />
+                <span>Cloud Sync Active</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-mono bg-[#181818] text-[#a1a1aa] border border-[#5c5c61]">
+                <HardDrive className="w-3 h-3 text-[#a1a1aa]" />
+                <span>Local Vault (Vercel Ready)</span>
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Database Config & Help Buttons */}
@@ -467,47 +508,105 @@ create policy "Allow read, insert and delete on threat_data"
               </button>
             </div>
 
-            <div className="space-y-4 text-xs font-sans text-[#ebeced]">
+            <div className="space-y-5 text-xs font-sans text-[#ebeced]">
               <div>
                 <h4 className="font-mono text-xs font-medium text-[#fafafa] mb-1 uppercase tracking-wider">
                   1. Supabase API Authentication
                 </h4>
-                <p className="text-[#a1a1aa] mb-2">
-                  To authenticate requests to <code className="text-[#fafafa]">https://hnfmtcpxfmyxljilbpte.supabase.co</code>, supply your project's <strong>anon</strong> public key or <strong>service_role</strong> key:
+                <p className="text-[#a1a1aa] mb-2 leading-relaxed">
+                  To sync data with <code className="text-[#fafafa]">https://hnfmtcpxfmyxljilbpte.supabase.co</code> from anywhere (including Vercel), enter your project's <strong>anon</strong> public API key:
                 </p>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <input
                     type="password"
-                    placeholder="Enter Supabase key..."
+                    placeholder="Enter Supabase anon public key (eyJhbG...)"
                     value={supabaseApiKey}
-                    onChange={(e) => setSupabaseApiKey(e.target.value)}
+                    onChange={(e) => {
+                      setSupabaseApiKey(e.target.value);
+                      setTestResult(null);
+                    }}
                     className="flex-1 bg-[#181818] border border-[#5c5c61] rounded px-3 py-2 text-xs font-mono text-[#fafafa] outline-none focus:border-[#fafafa]"
                   />
-                  <button
-                    onClick={() => {
-                      localStorage.setItem('TRACE_SUPABASE_KEY', supabaseApiKey);
-                      onRefresh();
-                    }}
-                    className="btn-pill-primary text-xs py-2 px-4 cursor-pointer"
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        localStorage.setItem('TRACE_SUPABASE_KEY', supabaseApiKey.trim());
+                        onRefresh();
+                      }}
+                      className="btn-pill-primary text-xs py-2 px-4 cursor-pointer flex-1 sm:flex-initial justify-center"
+                    >
+                      Save Key
+                    </button>
+                    <button
+                      onClick={handleTestConnection}
+                      disabled={isTesting || !supabaseApiKey.trim()}
+                      className="btn-pill-ghost text-xs py-2 px-3.5 cursor-pointer flex-1 sm:flex-initial justify-center disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isTesting ? 'animate-spin' : ''}`} />
+                      <span>{isTesting ? 'Testing...' : 'Test DB'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Test Feedback */}
+                {testResult && (
+                  <div
+                    className={`mt-2.5 p-2.5 rounded border text-xs font-mono flex items-start gap-2 ${
+                      testResult.ok
+                        ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                        : 'bg-amber-950/40 border-amber-500/40 text-amber-300'
+                    }`}
                   >
-                    Save Key
-                  </button>
+                    {testResult.ok ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                    )}
+                    <div className="flex-1">
+                      <p className="font-medium">{testResult.message}</p>
+                      {testResult.details && (
+                        <p className="text-[11px] opacity-90 mt-0.5 font-sans">{testResult.details}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Vercel Cloud Deployment Info */}
+              <div className="bg-[#181818] border border-[#5c5c61] p-3.5 rounded-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-mono text-xs font-medium text-[#fafafa] uppercase tracking-wider flex items-center gap-1.5">
+                    <ExternalLink className="w-3.5 h-3.5 text-[#a1a1aa]" />
+                    <span>2. Vercel Deployment Setup</span>
+                  </h4>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#232324] text-[#a1a1aa] border border-[#5c5c61]">
+                    Optional Automation
+                  </span>
+                </div>
+                <p className="text-[#a1a1aa] text-[11px] leading-relaxed">
+                  When deployed on Vercel, the app works automatically with local persistence. To automatically connect every user's session to your remote Supabase instance without entering keys:
+                </p>
+                <div className="bg-[#121212] p-2.5 rounded border border-[#333] font-mono text-[11px] text-[#ebeced] space-y-1">
+                  <p className="text-[#a1a1aa]"># In Vercel Project Settings → Environment Variables:</p>
+                  <p><span className="text-emerald-400">VITE_SUPABASE_ANON_KEY</span> = <span className="text-[#a1a1aa]">&lt;your-supabase-anon-key&gt;</span></p>
+                  <p><span className="text-emerald-400">SUPABASE_ANON_KEY</span> = <span className="text-[#a1a1aa]">&lt;your-supabase-anon-key&gt;</span></p>
                 </div>
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <h4 className="font-mono text-xs font-medium text-[#fafafa] uppercase tracking-wider">
-                    2. Table Schema Migration SQL
+                    3. Table Schema Migration SQL
                   </h4>
                   <div className="flex items-center gap-2">
                     <a
                       href="https://supabase.com/dashboard/project/hnfmtcpxfmyxljilbpte/sql/new"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[11px] font-mono text-[#fafafa] underline hover:text-[#a1a1aa]"
+                      className="text-[11px] font-mono text-[#fafafa] underline hover:text-[#a1a1aa] flex items-center gap-1"
                     >
-                      Open Supabase SQL Editor
+                      <span>Open SQL Editor</span>
+                      <ExternalLink className="w-3 h-3" />
                     </a>
                     <button
                       onClick={handleCopySql}
@@ -519,9 +618,9 @@ create policy "Allow read, insert and delete on threat_data"
                   </div>
                 </div>
                 <p className="text-[#a1a1aa] mb-2 text-[11px]">
-                  Copy and run this SQL once in your Supabase SQL Editor to add all forensic fields and enable RLS policies:
+                  If the table hasn't been created yet in your Supabase project, execute this SQL once in Supabase SQL Editor:
                 </p>
-                <pre className="bg-[#181818] border border-[#5c5c61] p-3 rounded text-[11px] font-mono text-[#ebeced] overflow-x-auto max-h-48 leading-relaxed">
+                <pre className="bg-[#181818] border border-[#5c5c61] p-3 rounded text-[11px] font-mono text-[#ebeced] overflow-x-auto max-h-44 leading-relaxed">
                   {SQL_SCHEMA}
                 </pre>
               </div>

@@ -11,6 +11,12 @@ import { EmailForensicResult, SupabaseThreatRecord } from './types';
 import { exportReportToPdf } from './utils/pdfExport';
 import { animateViewTransition } from './utils/animations';
 import { analyzeEmlDeterministic } from './utils/emlParser';
+import {
+  fetchThreatRecords,
+  insertThreatRecord,
+  deleteThreatRecord,
+  getEffectiveSupabaseKey,
+} from './utils/supabaseClient';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('investigate');
@@ -104,24 +110,18 @@ export default function App() {
     setDbError(null);
     setDbHint(null);
     try {
-      const headers: Record<string, string> = {};
-      if (supabaseApiKey) {
-        headers['x-supabase-key'] = supabaseApiKey;
-      }
-      const res = await fetch('/api/supabase/threat_data', { headers });
-      const json = await res.json();
-      if (json.success && Array.isArray(json.data)) {
-        if (json.data.length > 0) {
-          setSupabaseRecords(json.data);
-          localStorage.setItem('TRACE_LOCAL_RECORDS', JSON.stringify(json.data));
+      const result = await fetchThreatRecords(supabaseApiKey);
+      if (result.success && Array.isArray(result.data)) {
+        if (result.data.length > 0) {
+          setSupabaseRecords(result.data);
+          localStorage.setItem('TRACE_LOCAL_RECORDS', JSON.stringify(result.data));
         }
-      } else if (json.error) {
-        setDbError(json.error);
-        if (json.hint) setDbHint(json.hint);
+      } else if (result.error) {
+        setDbError(result.error);
+        if (result.hint) setDbHint(result.hint);
       }
     } catch (err: any) {
       console.log('Supabase fetch note:', err);
-      setDbError('Failed to communicate with Supabase proxy endpoint');
     } finally {
       setIsDbLoading(false);
     }
@@ -165,7 +165,7 @@ export default function App() {
   const saveRecordToDatabase = async (res: EmailForensicResult) => {
     setIsSyncing(true);
     const newRecord: SupabaseThreatRecord = {
-      id: crypto.randomUUID ? crypto.randomUUID() : undefined,
+      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `TRACE-${Date.now()}`,
       subject: res.subject,
       sender: res.sender,
       recipient: res.recipient,
@@ -188,23 +188,11 @@ export default function App() {
     });
 
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (supabaseApiKey) {
-        headers['x-supabase-key'] = supabaseApiKey;
-      }
-      const remoteRes = await fetch('/api/supabase/threat_data', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(newRecord),
-      });
-
-      if (remoteRes.ok) {
+      const mutateRes = await insertThreatRecord(newRecord, supabaseApiKey);
+      if (mutateRes.success) {
         setSyncSuccess(true);
-        const json = await remoteRes.json();
-        if (json.data && Array.isArray(json.data) && json.data[0]?.id) {
-          const generatedId = json.data[0].id;
+        if (mutateRes.data && Array.isArray(mutateRes.data) && mutateRes.data[0]?.id) {
+          const generatedId = mutateRes.data[0].id;
           setSupabaseRecords((prev) => {
             const updated = prev.map((r, i) => (i === 0 ? { ...r, id: generatedId } : r));
             localStorage.setItem('TRACE_LOCAL_RECORDS', JSON.stringify(updated));
@@ -233,23 +221,12 @@ export default function App() {
       return updated;
     });
 
-    // 2. If it is stored in remote Supabase, dispatch DELETE to the proxy
-    if (recordId && !recordId.startsWith('seed-') && !recordId.startsWith('TRACE-')) {
+    // 2. If it is stored in remote Supabase, dispatch DELETE
+    if (recordId && !recordId.startsWith('seed-')) {
       try {
-        const headers: Record<string, string> = {};
-        if (supabaseApiKey) {
-          headers['x-supabase-key'] = supabaseApiKey;
-        }
-        const res = await fetch(`/api/supabase/threat_data/${encodeURIComponent(recordId)}`, {
-          method: 'DELETE',
-          headers,
-        });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          console.warn('Supabase remote delete response:', errData);
-        }
+        await deleteThreatRecord(recordId, supabaseApiKey);
       } catch (err) {
-        console.warn('Remote Supabase delete request error:', err);
+        console.warn('Remote Supabase delete error:', err);
       }
     }
   };
